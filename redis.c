@@ -655,6 +655,7 @@ static void renameCommand(redisClient *c);
 static void renamenxCommand(redisClient *c);
 static void lpushCommand(redisClient *c);
 static void rpushCommand(redisClient *c);
+static void rpushxCommand(redisClient *c);
 static void lpopCommand(redisClient *c);
 static void rpopCommand(redisClient *c);
 static void llenCommand(redisClient *c);
@@ -752,6 +753,7 @@ static struct redisCommand cmdTable[] = {
     {"mget",mgetCommand,-2,REDIS_CMD_INLINE,NULL,1,-1,1},
     {"rpush",rpushCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"lpush",lpushCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
+    {"rpushx",rpushxCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"rpop",rpopCommand,2,REDIS_CMD_INLINE,NULL,1,1,1},
     {"lpop",lpopCommand,2,REDIS_CMD_INLINE,NULL,1,1,1},
     {"brpop",brpopCommand,-3,REDIS_CMD_INLINE,NULL,1,1,1},
@@ -4663,6 +4665,33 @@ static void lpushCommand(redisClient *c) {
 
 static void rpushCommand(redisClient *c) {
     pushGenericCommand(c,REDIS_TAIL);
+}
+
+static void rpushxCommand(redisClient *c) {
+    robj *lobj;
+    list *list;
+
+    lobj = lookupKey(c->db,c->argv[1]);
+    if (lobj == NULL) {
+        addReply(c,shared.czero);
+        return;
+    }
+    if (lobj->type != REDIS_LIST) {
+        addReply(c,shared.wrongtypeerr);
+        return;
+    }
+    if (handleClientsWaitingListPush(c,c->argv[1],c->argv[2])) {
+        addReply(c,shared.cone);
+        return;
+    }
+    list = lobj->ptr;
+    if (server.list_max_size > 0 && listLength(list) >= server.list_max_size) {
+        listDelNode(list, listFirst(list));
+    }
+    listAddNodeTail(list,c->argv[2]);
+    incrRefCount(c->argv[2]);
+    server.dirty++;
+    addReplySds(c,sdscatprintf(sdsempty(),":%d\r\n",listLength(list)));
 }
 
 static void llenCommand(redisClient *c) {
