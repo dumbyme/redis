@@ -624,6 +624,7 @@ static int listMatchPubsubPattern(void *a, void *b);
 static int compareStringObjects(robj *a, robj *b);
 static void usage();
 static int rewriteAppendOnlyFileBackground(void);
+static int vmSwapObjectBlocking(robj *key, robj *val);
 
 static void authCommand(redisClient *c);
 static void pingCommand(redisClient *c);
@@ -1634,7 +1635,7 @@ static void initServerConfig() {
     server.glueoutputbuf = 1;
     server.daemonize = 0;
     server.appendonly = 0;
-    server.appendfsync = APPENDFSYNC_ALWAYS;
+    server.appendfsync = APPENDFSYNC_EVERYSEC;
     server.lastfsync = time(NULL);
     server.appendfd = -1;
     server.appendseldb = -1; /* Make sure the first time will not match */
@@ -3946,13 +3947,13 @@ static robj *rdbLoadObject(int type, FILE *fp) {
 
 static int rdbLoad(char *filename) {
     FILE *fp;
-    robj *keyobj = NULL;
     uint32_t dbid;
     int type, retval, rdbver;
+    int swap_all_values = 0;
     dict *d = server.db[0].dict;
     redisDb *db = server.db+0;
     char buf[1024];
-    time_t expiretime = -1, now = time(NULL);
+    time_t expiretime, now = time(NULL);
     long long loadedkeys = 0;
 
     fp = fopen(filename,"r");
@@ -3971,8 +3972,9 @@ static int rdbLoad(char *filename) {
         return REDIS_ERR;
     }
     while(1) {
-        robj *o;
+        robj *key, *val;
 
+        expiretime = -1;
         /* Read type. */
         if ((type = rdbLoadType(fp)) == -1) goto eoferr;
         if (type == REDIS_EXPIRETIME) {
@@ -3994,36 +3996,61 @@ static int rdbLoad(char *filename) {
             continue;
         }
         /* Read key */
-        if ((keyobj = rdbLoadStringObject(fp)) == NULL) goto eoferr;
+        if ((key = rdbLoadStringObject(fp)) == NULL) goto eoferr;
         /* Read value */
-        if ((o = rdbLoadObject(type,fp)) == NULL) goto eoferr;
+        if ((val = rdbLoadObject(type,fp)) == NULL) goto eoferr;
+        /* Check if the key already expired */
+        if (expiretime != -1 && expiretime < now) {
+            decrRefCount(key);
+            decrRefCount(val);
+            continue;
+        }
         /* Add the new object in the hash table */
-        retval = dictAdd(d,keyobj,o);
+        retval = dictAdd(d,key,val);
         if (retval == DICT_ERR) {
-            redisLog(REDIS_WARNING,"Loading DB, duplicated key (%s) found! Unrecoverable error, exiting now.", keyobj->ptr);
+            redisLog(REDIS_WARNING,"Loading DB, duplicated key (%s) found! Unrecoverable error, exiting now.", key->ptr);
             exit(1);
         }
-        /* Set the expire time if needed */
-        if (expiretime != -1) {
-            setExpire(db,keyobj,expiretime);
-            /* Delete this key if already expired */
-            if (expiretime < now) deleteKey(db,keyobj);
-            expiretime = -1;
-        }
-        keyobj = o = NULL;
-        /* Handle swapping while loading big datasets when VM is on */
         loadedkeys++;
-        if (server.vm_enabled && (loadedkeys % 5000) == 0) {
+        /* Set the expire time if needed */
+        if (expiretime != -1) setExpire(db,key,expiretime);
+
+        /* Handle swapping while loading big datasets when VM is on */
+
+        /* If we detecter we are hopeless about fitting something in memory
+         * we just swap every new key on disk. Directly...
+         * Note that's important to check for this condition before resorting
+         * to random sampling, otherwise we may try to swap already
+         * swapped keys. */
+        if (swap_all_values) {
+            dictEntry *de = dictFind(d,key);
+
+            /* de may be NULL since the key already expired */
+            if (de) {
+                key = dictGetEntryKey(de);
+                val = dictGetEntryVal(de);
+
+                if (vmSwapObjectBlocking(key,val) == REDIS_OK) {
+                    dictGetEntryVal(de) = NULL;
+                }
+            }
+            continue;
+        }
+
+        /* If we have still some hope of having some value fitting memory
+         * then we try random sampling. */
+        if (!swap_all_values && server.vm_enabled && (loadedkeys % 5000) == 0) {
             while (zmalloc_used_memory() > server.vm_max_memory) {
                 if (vmSwapOneObjectBlocking() == REDIS_ERR) break;
             }
+            if (zmalloc_used_memory() > server.vm_max_memory)
+                swap_all_values = 1; /* We are already using too much mem */
         }
     }
     fclose(fp);
     return REDIS_OK;
 
 eoferr: /* unexpected end of file is handled here with a fatal exit */
-    if (keyobj) decrRefCount(keyobj);
     redisLog(REDIS_WARNING,"Short read or OOM loading DB. Unrecoverable error, aborting now.");
     exit(1);
     return REDIS_ERR; /* Just to avoid warning */
@@ -4204,8 +4231,8 @@ static void incrDecrCommand(redisClient *c, long long incr) {
     robj *o;
 
     o = lookupKeyWrite(c->db,c->argv[1]);
-
-    if (getLongLongFromObjectOrReply(c, o, &value, NULL) != REDIS_OK) return;
+    if (o != NULL && checkType(c,o,REDIS_STRING)) return;
+    if (getLongLongFromObjectOrReply(c,o,&value,NULL) != REDIS_OK) return;
 
     value += incr;
     o = createObject(REDIS_STRING,sdscatprintf(sdsempty(),"%lld",value));
@@ -9656,6 +9683,50 @@ static void configSetCommand(redisClient *c) {
         server.masterauth = zstrdup(o->ptr);
     } else if (!strcasecmp(c->argv[2]->ptr,"maxmemory")) {
         server.maxmemory = strtoll(o->ptr, NULL, 10);
+    } else if (!strcasecmp(c->argv[2]->ptr,"appendfsync")) {
+        if (!strcasecmp(o->ptr,"no")) {
+            server.appendfsync = APPENDFSYNC_NO;
+        } else if (!strcasecmp(o->ptr,"everysec")) {
+            server.appendfsync = APPENDFSYNC_EVERYSEC;
+        } else if (!strcasecmp(o->ptr,"always")) {
+            server.appendfsync = APPENDFSYNC_ALWAYS;
+        } else {
+            goto badfmt;
+        }
+    } else if (!strcasecmp(c->argv[2]->ptr,"save")) {
+        int vlen, j;
+        sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
+
+        /* Perform sanity check before setting the new config:
+         * - Even number of args
+         * - Seconds >= 1, changes >= 0 */
+        if (vlen & 1) {
+            sdsfreesplitres(v,vlen);
+            goto badfmt;
+        }
+        for (j = 0; j < vlen; j++) {
+            char *eptr;
+            long val;
+
+            val = strtoll(v[j], &eptr, 10);
+            if (eptr[0] != '\0' ||
+                ((j & 1) == 0 && val < 1) ||
+                ((j & 1) == 1 && val < 0)) {
+                sdsfreesplitres(v,vlen);
+                goto badfmt;
+            }
+        }
+        /* Finally set the new config */
+        resetServerSaveParams();
+        for (j = 0; j < vlen; j += 2) {
+            time_t seconds;
+            int changes;
+
+            seconds = strtoll(v[j],NULL,10);
+            changes = strtoll(v[j+1],NULL,10);
+            appendServerSaveParams(seconds, changes);
+        }
+        sdsfreesplitres(v,vlen);
     } else {
         addReplySds(c,sdscatprintf(sdsempty(),
             "-ERR not supported CONFIG parameter %s\r\n",
@@ -9665,6 +9736,14 @@ static void configSetCommand(redisClient *c) {
     }
     decrRefCount(o);
     addReply(c,shared.ok);
+    return;
+
+badfmt: /* Bad format errors */
+    addReplySds(c,sdscatprintf(sdsempty(),
+        "-ERR invalid argument '%s' for CONFIG SET '%s'\r\n",
+            (char*)o->ptr,
+            (char*)c->argv[2]->ptr));
+    decrRefCount(o);
 }
 
 static void configGetCommand(redisClient *c) {
@@ -9697,6 +9776,35 @@ static void configGetCommand(redisClient *c) {
         snprintf(buf,128,"%llu\n",server.maxmemory);
         addReplyBulkCString(c,"maxmemory");
         addReplyBulkCString(c,buf);
+        matches++;
+    }
+    if (stringmatch(pattern,"appendfsync",0)) {
+        char *policy;
+
+        switch(server.appendfsync) {
+        case APPENDFSYNC_NO: policy = "no"; break;
+        case APPENDFSYNC_EVERYSEC: policy = "everysec"; break;
+        case APPENDFSYNC_ALWAYS: policy = "always"; break;
+        default: policy = "unknown"; break; /* too harmless to panic */
+        }
+        addReplyBulkCString(c,"appendfsync");
+        addReplyBulkCString(c,policy);
+        matches++;
+    }
+    if (stringmatch(pattern,"save",0)) {
+        sds buf = sdsempty();
+        int j;
+
+        for (j = 0; j < server.saveparamslen; j++) {
+            buf = sdscatprintf(buf,"%ld %d",
+                    server.saveparams[j].seconds,
+                    server.saveparams[j].changes);
+            if (j != server.saveparamslen-1)
+                buf = sdscatlen(buf," ",1);
+        }
+        addReplyBulkCString(c,"save");
+        addReplyBulkCString(c,buf);
+        sdsfree(buf);
         matches++;
     }
     decrRefCount(o);
