@@ -402,6 +402,8 @@ struct redisServer {
     off_t vm_page_size;
     off_t vm_pages;
     unsigned long long vm_max_memory;
+    /* Lists config */
+    unsigned int list_max_size;
     /* Hashes config */
     size_t hash_max_zipmap_entries;
     size_t hash_max_zipmap_value;
@@ -1657,6 +1659,7 @@ static void initServerConfig() {
     server.vm_blocked_clients = 0;
     server.hash_max_zipmap_entries = REDIS_HASH_MAX_ZIPMAP_ENTRIES;
     server.hash_max_zipmap_value = REDIS_HASH_MAX_ZIPMAP_VALUE;
+    server.list_max_size = 0;
 
     resetServerSaveParams();
 
@@ -1925,6 +1928,8 @@ static void loadServerConfig(char *filename) {
             server.hash_max_zipmap_entries = memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0],"hash-max-zipmap-value") && argc == 2){
             server.hash_max_zipmap_value = memtoll(argv[1], NULL);
+        } else if (!strcasecmp(argv[0],"list-max-size") && argc == 2) {
+            server.list_max_size = atoi(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -4638,6 +4643,9 @@ static void pushGenericCommand(redisClient *c, int where) {
             return;
         }
         list = lobj->ptr;
+        if (listLength(list) >= server.list_max_size) {
+            listDelNode(list, where == REDIS_HEAD ? listLast(list) : listFirst(list));
+        }
         if (where == REDIS_HEAD) {
             listAddNodeHead(list,c->argv[2]);
         } else {
