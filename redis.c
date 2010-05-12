@@ -4643,7 +4643,7 @@ static void pushGenericCommand(redisClient *c, int where) {
             return;
         }
         list = lobj->ptr;
-        if (listLength(list) >= server.list_max_size) {
+        if (server.list_max_size > 0 && listLength(list) >= server.list_max_size) {
             listDelNode(list, where == REDIS_HEAD ? listLast(list) : listFirst(list));
         }
         if (where == REDIS_HEAD) {
