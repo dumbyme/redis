@@ -245,7 +245,7 @@ static void _redisPanic(char *msg, char *file, int line);
 
 /* The VM object structure */
 struct redisObjectVM {
-    off_t page;         /* the page at witch the object is stored on disk */
+    off_t page;         /* the page at which the object is stored on disk */
     off_t usedpages;    /* number of pages used on disk */
     time_t atime;       /* Last access time */
 } vm;
