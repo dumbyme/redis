@@ -183,9 +183,9 @@ void listRewindTail(list *list, listIter *li) {
  * or NULL if there are no more elements, so the classical usage patter
  * is:
  *
- * iter = listGetItarotr(list,<direction>);
- * while ((node = listNextIterator(iter)) != NULL) {
- *     DoSomethingWith(listNodeValue(node));
+ * iter = listGetIterator(list,<direction>);
+ * while ((node = listNext(iter)) != NULL) {
+ *     doSomethingWith(listNodeValue(node));
  * }
  *
  * */
