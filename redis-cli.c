@@ -84,6 +84,7 @@ static struct redisCommand cmdTable[] = {
     {"rpush",3,CMDFLAG_NONE},
     {"lpush",3,CMDFLAG_NONE},
     {"rpushx",3,CMDFLAG_NONE},
+    {"rpushxafter",4,CMDFLAG_NONE},
     {"rpop",2,CMDFLAG_NONE},
     {"lpop",2,CMDFLAG_NONE},
     {"brpop",-3,CMDFLAG_NONE},

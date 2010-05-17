@@ -656,6 +656,7 @@ static void renamenxCommand(redisClient *c);
 static void lpushCommand(redisClient *c);
 static void rpushCommand(redisClient *c);
 static void rpushxCommand(redisClient *c);
+static void rpushxafterCommand(redisClient *c);
 static void lpopCommand(redisClient *c);
 static void rpopCommand(redisClient *c);
 static void llenCommand(redisClient *c);
@@ -755,6 +756,7 @@ static struct redisCommand cmdTable[] = {
     {"rpush",rpushCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"lpush",lpushCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"rpushx",rpushxCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
+    {"rpushxafter",rpushxafterCommand,4,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"rpop",rpopCommand,2,REDIS_CMD_INLINE,NULL,1,1,1},
     {"lpop",lpopCommand,2,REDIS_CMD_INLINE,NULL,1,1,1},
     {"brpop",brpopCommand,-3,REDIS_CMD_INLINE,NULL,1,1,1},
@@ -4669,13 +4671,15 @@ static void rpushCommand(redisClient *c) {
     pushGenericCommand(c,REDIS_TAIL);
 }
 
-static void rpushxCommand(redisClient *c) {
+static void rpushxGenericCommand(redisClient *c, robj *old_obj, robj *new_obj) {
     robj *o;
     list *list;
+    listIter *iter;
+    listNode *node;
 
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,REDIS_LIST)) return;
-    if (handleClientsWaitingListPush(c,c->argv[1],c->argv[2])) {
+    if (handleClientsWaitingListPush(c,c->argv[1],new_obj)) {
         addReply(c,shared.cone);
         return;
     }
@@ -4683,10 +4687,33 @@ static void rpushxCommand(redisClient *c) {
     if (server.list_max_size > 0 && listLength(list) >= server.list_max_size) {
         listDelNode(list, listFirst(list));
     }
-    listAddNodeTail(list,c->argv[2]);
-    incrRefCount(c->argv[2]);
+
+    if (old_obj != NULL) {
+        iter = listGetIterator(list, AL_START_HEAD);
+        while ((node = listNext(iter)) != NULL) {
+            if (compareStringObjects(listNodeValue(node), old_obj) == 0) {
+                break;
+            }
+        }
+        listReleaseIterator(iter);
+        if (node != NULL) {
+            listInsertNode(list,node,new_obj);
+            incrRefCount(new_obj);
+        }
+    } else {
+        listAddNodeTail(list,new_obj);
+        incrRefCount(new_obj);
+    }
     server.dirty++;
     addReplyUlong(c,listLength(list));
+}
+
+static void rpushxCommand(redisClient *c) {
+    rpushxGenericCommand(c,NULL,c->argv[2]);
+}
+
+static void rpushxafterCommand(redisClient *c) {
+    rpushxGenericCommand(c,c->argv[2],c->argv[3]);
 }
 
 static void llenCommand(redisClient *c) {
