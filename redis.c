@@ -661,6 +661,7 @@ static void rpopCommand(redisClient *c);
 static void llenCommand(redisClient *c);
 static void lindexCommand(redisClient *c);
 static void lrangeCommand(redisClient *c);
+static void ldeleteCommand(redisClient *c);
 static void ltrimCommand(redisClient *c);
 static void typeCommand(redisClient *c);
 static void lsetCommand(redisClient *c);
@@ -762,6 +763,7 @@ static struct redisCommand cmdTable[] = {
     {"lindex",lindexCommand,3,REDIS_CMD_INLINE,NULL,1,1,1},
     {"lset",lsetCommand,4,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"lrange",lrangeCommand,4,REDIS_CMD_INLINE,NULL,1,1,1},
+    {"ldelete",ldeleteCommand,3,REDIS_CMD_BULK,NULL,1,1,1},
     {"ltrim",ltrimCommand,4,REDIS_CMD_INLINE,NULL,1,1,1},
     {"lrem",lremCommand,4,REDIS_CMD_BULK,NULL,1,1,1},
     {"rpoplpush",rpoplpushcommand,3,REDIS_CMD_INLINE|REDIS_CMD_DENYOOM,NULL,1,2,1},
@@ -4668,30 +4670,23 @@ static void rpushCommand(redisClient *c) {
 }
 
 static void rpushxCommand(redisClient *c) {
-    robj *lobj;
+    robj *o;
     list *list;
 
-    lobj = lookupKey(c->db,c->argv[1]);
-    if (lobj == NULL) {
-        addReply(c,shared.czero);
-        return;
-    }
-    if (lobj->type != REDIS_LIST) {
-        addReply(c,shared.wrongtypeerr);
-        return;
-    }
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+        checkType(c,o,REDIS_LIST)) return;
     if (handleClientsWaitingListPush(c,c->argv[1],c->argv[2])) {
         addReply(c,shared.cone);
         return;
     }
-    list = lobj->ptr;
+    list = o->ptr;
     if (server.list_max_size > 0 && listLength(list) >= server.list_max_size) {
         listDelNode(list, listFirst(list));
     }
     listAddNodeTail(list,c->argv[2]);
     incrRefCount(c->argv[2]);
     server.dirty++;
-    addReplySds(c,sdscatprintf(sdsempty(),":%d\r\n",listLength(list)));
+    addReplyUlong(c,listLength(list));
 }
 
 static void llenCommand(redisClient *c) {
@@ -4779,6 +4774,32 @@ static void lpopCommand(redisClient *c) {
 
 static void rpopCommand(redisClient *c) {
     popGenericCommand(c,REDIS_TAIL);
+}
+
+static void ldeleteCommand(redisClient *c) {
+    robj *o;
+    list *list;
+    listIter *iter;
+    listNode *node;
+
+    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+        checkType(c,o,REDIS_LIST)) return;
+    list = o->ptr;
+    iter = listGetIterator(list, AL_START_HEAD);
+    while ((node = listNext(iter)) != NULL) {
+        if (compareStringObjects(listNodeValue(node), c->argv[2]) == 0) {
+            break;
+        }
+    }
+    listReleaseIterator(iter);
+    if (node == NULL) {
+        addReply(c,shared.czero);
+    } else {
+        listDelNode(list, node);
+        if (listLength(list) == 0) deleteKey(c->db,c->argv[1]);
+        server.dirty++;
+        addReply(c,shared.cone);
+    }
 }
 
 static void lrangeCommand(redisClient *c) {
