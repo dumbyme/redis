@@ -123,6 +123,27 @@ list *listAddNodeTail(list *list, void *value)
     return list;
 }
 
+list *listInsertNode(list *list, listNode *old_node, void *value) {
+    listNode *node;
+
+    if ((node = zmalloc(sizeof(*node))) == NULL)
+        return NULL;
+    node->value = value;
+    node->next = old_node;
+    node->prev = old_node->prev;
+    if (node->prev != NULL) {
+        node->prev->next = node;
+    }
+    if (node->next != NULL) {
+        node->next->prev = node;
+    }
+    if (list->head == old_node) {
+        list->head = node;
+    }
+    list->len++;
+    return list;
+}
+
 /* Remove the specified node from the specified list.
  * It's up to the caller to free the private value of the node.
  *
