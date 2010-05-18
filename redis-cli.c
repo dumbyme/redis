@@ -54,6 +54,7 @@ static struct config {
     long repeat;
     int dbnum;
     int interactive;
+    int shutdown;
     int monitor_mode;
     int pubsub_mode;
     int raw_output;
@@ -115,8 +116,8 @@ static struct redisCommand cmdTable[] = {
     {"zincrby",4,CMDFLAG_NONE},
     {"zrem",3,CMDFLAG_NONE},
     {"zremrangebyscore",4,CMDFLAG_NONE},
-    {"zmerge",-3,CMDFLAG_NONE},
-    {"zmergeweighed",-4,CMDFLAG_NONE},
+    {"zunion",-4,CMDFLAG_NONE},
+    {"zinter",-4,CMDFLAG_NONE},
     {"zrange",-4,CMDFLAG_NONE},
     {"zrank",3,CMDFLAG_NONE},
     {"zrevrank",3,CMDFLAG_NONE},
@@ -316,7 +317,10 @@ static int cliReadMultiBulkReply(int fd) {
 static int cliReadReply(int fd) {
     char type;
 
-    if (anetRead(fd,&type,1) <= 0) exit(1);
+    if (anetRead(fd,&type,1) <= 0) {
+        if (config.shutdown) return 0;
+        exit(1);
+    }
     switch(type) {
     case '-':
         printf("(error) ");
@@ -373,6 +377,8 @@ static int cliSendCommand(int argc, char **argv, int repeat) {
             fprintf(stderr,"Wrong number of arguments for '%s'\n",rc->name);
             return 1;
     }
+
+    if (!strcasecmp(rc->name,"shutdown")) config.shutdown = 1;
     if (!strcasecmp(rc->name,"monitor")) config.monitor_mode = 1;
     if (!strcasecmp(rc->name,"subscribe") ||
         !strcasecmp(rc->name,"psubscribe")) config.pubsub_mode = 1;
@@ -410,6 +416,7 @@ static int cliSendCommand(int argc, char **argv, int repeat) {
         }
 
         retval = cliReadReply(fd);
+
         if (retval) {
             return retval;
         }
@@ -594,6 +601,7 @@ int main(int argc, char **argv) {
     config.hostport = 6379;
     config.repeat = 1;
     config.dbnum = 0;
+    config.shutdown = 0;
     config.interactive = 0;
     config.monitor_mode = 0;
     config.pubsub_mode = 0;
