@@ -661,7 +661,9 @@ static void renameCommand(redisClient *c);
 static void renamenxCommand(redisClient *c);
 static void lpushCommand(redisClient *c);
 static void rpushCommand(redisClient *c);
+static void lpushxCommand(redisClient *c);
 static void rpushxCommand(redisClient *c);
+static void lpushxafterCommand(redisClient *c);
 static void rpushxafterCommand(redisClient *c);
 static void lpopCommand(redisClient *c);
 static void rpopCommand(redisClient *c);
@@ -762,7 +764,9 @@ static struct redisCommand cmdTable[] = {
     {"rpush",rpushCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"lpush",lpushCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"rpushx",rpushxCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
+    {"lpushx",lpushxCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"rpushxafter",rpushxafterCommand,4,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
+    {"lpushxafter",lpushxafterCommand,4,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"rpop",rpopCommand,2,REDIS_CMD_INLINE,NULL,1,1,1},
     {"lpop",lpopCommand,2,REDIS_CMD_INLINE,NULL,1,1,1},
     {"brpop",brpopCommand,-3,REDIS_CMD_INLINE,NULL,1,1,1},
@@ -4746,13 +4750,13 @@ static void pushGenericCommand(redisClient *c, int where) {
             return;
         }
         list = lobj->ptr;
-        if (server.list_max_size > 0 && listLength(list) >= server.list_max_size) {
-            listDelNode(list, where == REDIS_HEAD ? listLast(list) : listFirst(list));
-        }
         if (where == REDIS_HEAD) {
             listAddNodeHead(list,c->argv[2]);
         } else {
             listAddNodeTail(list,c->argv[2]);
+        }
+        if (server.list_max_size > 0 && listLength(list) > server.list_max_size) {
+            listDelNode(list, where == REDIS_HEAD ? listLast(list) : listFirst(list));
         }
         incrRefCount(c->argv[2]);
     }
@@ -4768,7 +4772,7 @@ static void rpushCommand(redisClient *c) {
     pushGenericCommand(c,REDIS_TAIL);
 }
 
-static void rpushxGenericCommand(redisClient *c, robj *old_obj, robj *new_obj) {
+static void pushxGenericCommand(redisClient *c, int where, robj *old_obj, robj *new_obj) {
     robj *o;
     list *list;
     listIter *iter;
@@ -4781,12 +4785,9 @@ static void rpushxGenericCommand(redisClient *c, robj *old_obj, robj *new_obj) {
         return;
     }
     list = o->ptr;
-    if (server.list_max_size > 0 && listLength(list) >= server.list_max_size) {
-        listDelNode(list, listFirst(list));
-    }
 
     if (old_obj != NULL) {
-        iter = listGetIterator(list, AL_START_HEAD);
+        iter = listGetIterator(list, where == REDIS_HEAD ? AL_START_TAIL : AL_START_HEAD);
         while ((node = listNext(iter)) != NULL) {
             if (compareStringObjects(listNodeValue(node), old_obj) == 0) {
                 break;
@@ -4794,23 +4795,42 @@ static void rpushxGenericCommand(redisClient *c, robj *old_obj, robj *new_obj) {
         }
         listReleaseIterator(iter);
         if (node != NULL) {
-            listInsertNode(list,node,new_obj);
+            if (where == REDIS_HEAD) {
+                listInsertNode(list,node,new_obj,1);
+            } else {
+                listInsertNode(list,node,new_obj,0);
+            }
             incrRefCount(new_obj);
         }
     } else {
-        listAddNodeTail(list,new_obj);
+        if (where == REDIS_HEAD) {
+            listAddNodeHead(list,c->argv[2]);
+        } else {
+            listAddNodeTail(list,c->argv[2]);
+        }
         incrRefCount(new_obj);
+    }
+    if (server.list_max_size > 0 && listLength(list) > server.list_max_size) {
+        listDelNode(list, where == REDIS_HEAD ? listLast(list) : listFirst(list));
     }
     server.dirty++;
     addReplyUlong(c,listLength(list));
 }
 
+static void lpushxCommand(redisClient *c) {
+    pushxGenericCommand(c,REDIS_HEAD,NULL,c->argv[2]);
+}
+
 static void rpushxCommand(redisClient *c) {
-    rpushxGenericCommand(c,NULL,c->argv[2]);
+    pushxGenericCommand(c,REDIS_TAIL,NULL,c->argv[2]);
+}
+
+static void lpushxafterCommand(redisClient *c) {
+    pushxGenericCommand(c,REDIS_HEAD,c->argv[2],c->argv[3]);
 }
 
 static void rpushxafterCommand(redisClient *c) {
-    rpushxGenericCommand(c,c->argv[2],c->argv[3]);
+    pushxGenericCommand(c,REDIS_TAIL,c->argv[2],c->argv[3]);
 }
 
 static void llenCommand(redisClient *c) {
