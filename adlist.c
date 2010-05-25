@@ -123,22 +123,30 @@ list *listAddNodeTail(list *list, void *value)
     return list;
 }
 
-list *listInsertNode(list *list, listNode *old_node, void *value) {
+list *listInsertNode(list *list, listNode *old_node, void *value, int after) {
     listNode *node;
 
     if ((node = zmalloc(sizeof(*node))) == NULL)
         return NULL;
     node->value = value;
-    node->next = old_node;
-    node->prev = old_node->prev;
+    if (after) {
+        node->prev = old_node;
+        node->next = old_node->next;
+        if (list->tail == old_node) {
+            list->tail = node;
+        }
+    } else {
+        node->next = old_node;
+        node->prev = old_node->prev;
+        if (list->head == old_node) {
+            list->head = node;
+        }
+    }
     if (node->prev != NULL) {
         node->prev->next = node;
     }
     if (node->next != NULL) {
         node->next->prev = node;
-    }
-    if (list->head == old_node) {
-        list->head = node;
     }
     list->len++;
     return list;
