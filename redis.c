@@ -427,6 +427,9 @@ struct redisServer {
     off_t vm_page_size;
     off_t vm_pages;
     unsigned long long vm_max_memory;
+    /* Lists config */
+    unsigned int list_max_size;
+    /* Hashes config */
     /* Zip structure config */
     size_t hash_max_zipmap_entries;
     size_t hash_max_zipmap_value;
@@ -692,6 +695,10 @@ static void renameCommand(redisClient *c);
 static void renamenxCommand(redisClient *c);
 static void lpushCommand(redisClient *c);
 static void rpushCommand(redisClient *c);
+static void lpushxCommand(redisClient *c);
+static void rpushxCommand(redisClient *c);
+static void lpushxafterCommand(redisClient *c);
+static void rpushxafterCommand(redisClient *c);
 static void lpopCommand(redisClient *c);
 static void rpopCommand(redisClient *c);
 static void llenCommand(redisClient *c);
@@ -792,6 +799,10 @@ static struct redisCommand readonlyCommandTable[] = {
     {"mget",mgetCommand,-2,REDIS_CMD_INLINE,NULL,1,-1,1},
     {"rpush",rpushCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"lpush",lpushCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
+    {"rpushx",rpushxCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
+    {"lpushx",lpushxCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
+    {"rpushxafter",rpushxafterCommand,4,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
+    {"lpushxafter",lpushxafterCommand,4,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"rpop",rpopCommand,2,REDIS_CMD_INLINE,NULL,1,1,1},
     {"lpop",lpopCommand,2,REDIS_CMD_INLINE,NULL,1,1,1},
     {"brpop",brpopCommand,-3,REDIS_CMD_INLINE,NULL,1,1,1},
@@ -1763,6 +1774,7 @@ static void initServerConfig() {
     server.list_max_ziplist_entries = REDIS_LIST_MAX_ZIPLIST_ENTRIES;
     server.list_max_ziplist_value = REDIS_LIST_MAX_ZIPLIST_VALUE;
     server.shutdown_asap = 0;
+    server.list_max_size = 0;
 
     resetServerSaveParams();
 
@@ -2044,6 +2056,8 @@ static void loadServerConfig(char *filename) {
             server.list_max_ziplist_entries = memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0],"list-max-ziplist-value") && argc == 2){
             server.list_max_ziplist_value = memtoll(argv[1], NULL);
+        } else if (!strcasecmp(argv[0],"list-max-size") && argc == 2) {
+            server.list_max_size = atoi(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -4916,25 +4930,11 @@ static void listTypeTryConversion(robj *subject, robj *value) {
             listTypeConvert(subject,REDIS_ENCODING_LIST);
 }
 
-static void listTypePush(robj *subject, robj *value, int where) {
-    /* Check if we need to convert the ziplist */
-    listTypeTryConversion(subject,value);
-    if (subject->encoding == REDIS_ENCODING_ZIPLIST &&
-        ziplistLen(subject->ptr) > server.list_max_ziplist_entries)
-            listTypeConvert(subject,REDIS_ENCODING_LIST);
-
+static unsigned long listTypeLength(robj *subject) {
     if (subject->encoding == REDIS_ENCODING_ZIPLIST) {
-        int pos = (where == REDIS_HEAD) ? ZIPLIST_HEAD : ZIPLIST_TAIL;
-        value = getDecodedObject(value);
-        subject->ptr = ziplistPush(subject->ptr,value->ptr,sdslen(value->ptr),pos);
-        decrRefCount(value);
+        return ziplistLen(subject->ptr);
     } else if (subject->encoding == REDIS_ENCODING_LIST) {
-        if (where == REDIS_HEAD) {
-            listAddNodeHead(subject->ptr,value);
-        } else {
-            listAddNodeTail(subject->ptr,value);
-        }
-        incrRefCount(value);
+        return listLength((list*)subject->ptr);
     } else {
         redisPanic("Unknown list encoding");
     }
@@ -4977,13 +4977,32 @@ static robj *listTypePop(robj *subject, int where) {
     return value;
 }
 
-static unsigned long listTypeLength(robj *subject) {
+static void listTypePush(robj *subject, robj *value, int where) {
+    /* Check if we need to convert the ziplist */
+    listTypeTryConversion(subject,value);
+    if (subject->encoding == REDIS_ENCODING_ZIPLIST &&
+        ziplistLen(subject->ptr) > server.list_max_ziplist_entries)
+            listTypeConvert(subject,REDIS_ENCODING_LIST);
+
     if (subject->encoding == REDIS_ENCODING_ZIPLIST) {
-        return ziplistLen(subject->ptr);
+        int pos = (where == REDIS_HEAD) ? ZIPLIST_HEAD : ZIPLIST_TAIL;
+        value = getDecodedObject(value);
+        subject->ptr = ziplistPush(subject->ptr,value->ptr,sdslen(value->ptr),pos);
+        decrRefCount(value);
     } else if (subject->encoding == REDIS_ENCODING_LIST) {
-        return listLength((list*)subject->ptr);
+        if (where == REDIS_HEAD) {
+            listAddNodeHead(subject->ptr,value);
+        } else {
+            listAddNodeTail(subject->ptr,value);
+        }
+        incrRefCount(value);
     } else {
         redisPanic("Unknown list encoding");
+    }
+
+    if (server.list_max_size > 0 && listTypeLength(subject) > server.list_max_size) {
+        robj *temp = listTypePop(subject, where == REDIS_HEAD ? REDIS_TAIL : REDIS_HEAD);
+        decrRefCount(temp);
     }
 }
 
@@ -5172,6 +5191,87 @@ static void lpushCommand(redisClient *c) {
 
 static void rpushCommand(redisClient *c) {
     pushGenericCommand(c,REDIS_TAIL);
+}
+
+static void listTypeInsert(robj *subject, listTypeEntry *old_entry, robj *new_obj, int where) {
+    listTypeTryConversion(subject,new_obj);
+    if (subject->encoding == REDIS_ENCODING_ZIPLIST) {
+        if (where == REDIS_HEAD) {
+            subject->ptr = ziplistInsert(subject->ptr,old_entry->zi,new_obj->ptr,sdslen(new_obj->ptr));
+        } else {
+            subject->ptr = ziplistInsert(subject->ptr,ziplistNext(subject->ptr,old_entry->zi),new_obj->ptr,sdslen(new_obj->ptr));
+        }
+    } else if (subject->encoding == REDIS_ENCODING_LIST) {
+        if (where == REDIS_HEAD) {
+            listInsertNode(subject->ptr,old_entry->ln,new_obj,1);
+        } else {
+            listInsertNode(subject->ptr,old_entry->ln,new_obj,0);
+        }
+        incrRefCount(new_obj);
+    } else {
+        redisPanic("Unknown list encoding");
+    }
+
+    if (server.list_max_size > 0 && listTypeLength(subject) > server.list_max_size) {
+        robj *temp = listTypePop(subject, where == REDIS_HEAD ? REDIS_TAIL : REDIS_HEAD);
+        decrRefCount(temp);
+    }
+}
+
+static void pushxGenericCommand(redisClient *c, int where, robj *old_obj, robj *new_obj) {
+    robj *subject;
+    listTypeIterator *iter;
+    listTypeEntry entry;
+
+    if ((subject = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
+        checkType(c,subject,REDIS_LIST)) return;
+    if (handleClientsWaitingListPush(c,c->argv[1],new_obj)) {
+        addReply(c,shared.cone);
+        return;
+    }
+
+    if (subject->encoding == REDIS_ENCODING_ZIPLIST)
+        new_obj = getDecodedObject(new_obj);
+
+    if (old_obj != NULL) {
+        /* Make sure obj is raw when we're dealing with a ziplist */
+        if (subject->encoding == REDIS_ENCODING_ZIPLIST)
+            old_obj = getDecodedObject(old_obj);
+
+        if (where == REDIS_HEAD) {
+            iter = listTypeInitIterator(subject,-1,REDIS_TAIL);
+        } else {
+            iter = listTypeInitIterator(subject,0,REDIS_HEAD);
+        }
+        while (listTypeNext(iter,&entry)) {
+            if (listTypeEqual(&entry,old_obj)) {
+                listTypeInsert(subject,&entry,new_obj,where);
+                break;
+            }
+        }
+        listTypeReleaseIterator(iter);
+    } else {
+        listTypePush(subject,new_obj,where);
+    }
+
+    server.dirty++;
+    addReplyUlong(c,listTypeLength(subject));
+}
+
+static void lpushxCommand(redisClient *c) {
+    pushxGenericCommand(c,REDIS_HEAD,NULL,c->argv[2]);
+}
+
+static void rpushxCommand(redisClient *c) {
+    pushxGenericCommand(c,REDIS_TAIL,NULL,c->argv[2]);
+}
+
+static void lpushxafterCommand(redisClient *c) {
+    pushxGenericCommand(c,REDIS_HEAD,c->argv[2],c->argv[3]);
+}
+
+static void rpushxafterCommand(redisClient *c) {
+    pushxGenericCommand(c,REDIS_TAIL,c->argv[2],c->argv[3]);
 }
 
 static void llenCommand(redisClient *c) {
@@ -10409,6 +10509,8 @@ static void configSetCommand(redisClient *c) {
                 }
             }
         }
+    } else if (!strcasecmp(c->argv[2]->ptr,"list_max_size")) {
+        server.list_max_size = atoi(o->ptr);
     } else if (!strcasecmp(c->argv[2]->ptr,"save")) {
         int vlen, j;
         sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
