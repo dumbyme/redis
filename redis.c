@@ -5197,9 +5197,14 @@ static void listTypeInsert(robj *subject, listTypeEntry *old_entry, robj *new_ob
     listTypeTryConversion(subject,new_obj);
     if (subject->encoding == REDIS_ENCODING_ZIPLIST) {
         if (where == REDIS_HEAD) {
-            subject->ptr = ziplistInsert(subject->ptr,old_entry->zi,new_obj->ptr,sdslen(new_obj->ptr));
+            unsigned char *next = ziplistNext(subject->ptr,old_entry->zi);
+            if (next == NULL) {
+                listTypePush(subject,new_obj,REDIS_TAIL);
+            } else {
+                subject->ptr = ziplistInsert(subject->ptr,next,new_obj->ptr,sdslen(new_obj->ptr));
+            }
         } else {
-            subject->ptr = ziplistInsert(subject->ptr,ziplistNext(subject->ptr,old_entry->zi),new_obj->ptr,sdslen(new_obj->ptr));
+            subject->ptr = ziplistInsert(subject->ptr,old_entry->zi,new_obj->ptr,sdslen(new_obj->ptr));
         }
     } else if (subject->encoding == REDIS_ENCODING_LIST) {
         if (where == REDIS_HEAD) {
@@ -5239,9 +5244,9 @@ static void pushxGenericCommand(redisClient *c, int where, robj *old_obj, robj *
             old_obj = getDecodedObject(old_obj);
 
         if (where == REDIS_HEAD) {
-            iter = listTypeInitIterator(subject,-1,REDIS_TAIL);
+            iter = listTypeInitIterator(subject,0,REDIS_TAIL);
         } else {
-            iter = listTypeInitIterator(subject,0,REDIS_HEAD);
+            iter = listTypeInitIterator(subject,-1,REDIS_HEAD);
         }
         while (listTypeNext(iter,&entry)) {
             if (listTypeEqual(&entry,old_obj)) {
