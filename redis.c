@@ -429,7 +429,6 @@ struct redisServer {
     unsigned long long vm_max_memory;
     /* Lists config */
     unsigned int list_max_size;
-    /* Hashes config */
     /* Zip structure config */
     size_t hash_max_zipmap_entries;
     size_t hash_max_zipmap_value;
