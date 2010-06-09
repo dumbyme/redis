@@ -5235,14 +5235,7 @@ static void pushxGenericCommand(redisClient *c, int where, robj *old_obj, robj *
         return;
     }
 
-    if (subject->encoding == REDIS_ENCODING_ZIPLIST)
-        new_obj = getDecodedObject(new_obj);
-
     if (old_obj != NULL) {
-        /* Make sure obj is raw when we're dealing with a ziplist */
-        if (subject->encoding == REDIS_ENCODING_ZIPLIST)
-            old_obj = getDecodedObject(old_obj);
-
         if (where == REDIS_HEAD) {
             iter = listTypeInitIterator(subject,0,REDIS_TAIL);
         } else {
