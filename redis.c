@@ -427,8 +427,6 @@ struct redisServer {
     off_t vm_page_size;
     off_t vm_pages;
     unsigned long long vm_max_memory;
-    /* Lists config */
-    unsigned int list_max_size;
     /* Zip structure config */
     size_t hash_max_zipmap_entries;
     size_t hash_max_zipmap_value;
@@ -1773,7 +1771,6 @@ static void initServerConfig() {
     server.list_max_ziplist_entries = REDIS_LIST_MAX_ZIPLIST_ENTRIES;
     server.list_max_ziplist_value = REDIS_LIST_MAX_ZIPLIST_VALUE;
     server.shutdown_asap = 0;
-    server.list_max_size = 0;
 
     resetServerSaveParams();
 
@@ -2055,8 +2052,6 @@ static void loadServerConfig(char *filename) {
             server.list_max_ziplist_entries = memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0],"list-max-ziplist-value") && argc == 2){
             server.list_max_ziplist_value = memtoll(argv[1], NULL);
-        } else if (!strcasecmp(argv[0],"list-max-size") && argc == 2) {
-            server.list_max_size = atoi(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -4998,11 +4993,6 @@ static void listTypePush(robj *subject, robj *value, int where) {
     } else {
         redisPanic("Unknown list encoding");
     }
-
-    if (server.list_max_size > 0 && listTypeLength(subject) > server.list_max_size) {
-        robj *temp = listTypePop(subject, where == REDIS_HEAD ? REDIS_TAIL : REDIS_HEAD);
-        decrRefCount(temp);
-    }
 }
 
 /* Structure to hold set iteration abstraction. */
@@ -5214,11 +5204,6 @@ static void listTypeInsert(robj *subject, listTypeEntry *old_entry, robj *new_ob
         incrRefCount(new_obj);
     } else {
         redisPanic("Unknown list encoding");
-    }
-
-    if (server.list_max_size > 0 && listTypeLength(subject) > server.list_max_size) {
-        robj *temp = listTypePop(subject, where == REDIS_HEAD ? REDIS_TAIL : REDIS_HEAD);
-        decrRefCount(temp);
     }
 }
 
@@ -10506,8 +10491,6 @@ static void configSetCommand(redisClient *c) {
                 }
             }
         }
-    } else if (!strcasecmp(c->argv[2]->ptr,"list_max_size")) {
-        server.list_max_size = atoi(o->ptr);
     } else if (!strcasecmp(c->argv[2]->ptr,"save")) {
         int vlen, j;
         sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
