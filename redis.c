@@ -694,8 +694,7 @@ static void lpushCommand(redisClient *c);
 static void rpushCommand(redisClient *c);
 static void lpushxCommand(redisClient *c);
 static void rpushxCommand(redisClient *c);
-static void lpushxafterCommand(redisClient *c);
-static void rpushxafterCommand(redisClient *c);
+static void linsertCommand(redisClient *c);
 static void lpopCommand(redisClient *c);
 static void rpopCommand(redisClient *c);
 static void llenCommand(redisClient *c);
@@ -798,8 +797,7 @@ static struct redisCommand readonlyCommandTable[] = {
     {"lpush",lpushCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"rpushx",rpushxCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"lpushx",lpushxCommand,3,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
-    {"rpushxafter",rpushxafterCommand,4,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
-    {"lpushxafter",lpushxafterCommand,4,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
+    {"linsert",linsertCommand,5,REDIS_CMD_BULK|REDIS_CMD_DENYOOM,NULL,1,1,1},
     {"rpop",rpopCommand,2,REDIS_CMD_INLINE,NULL,1,1,1},
     {"lpop",lpopCommand,2,REDIS_CMD_INLINE,NULL,1,1,1},
     {"brpop",brpopCommand,-3,REDIS_CMD_INLINE,NULL,1,1,1},
@@ -5248,12 +5246,14 @@ static void rpushxCommand(redisClient *c) {
     pushxGenericCommand(c,REDIS_TAIL,NULL,c->argv[2]);
 }
 
-static void lpushxafterCommand(redisClient *c) {
-    pushxGenericCommand(c,REDIS_HEAD,c->argv[2],c->argv[3]);
-}
-
-static void rpushxafterCommand(redisClient *c) {
-    pushxGenericCommand(c,REDIS_TAIL,c->argv[2],c->argv[3]);
+static void linsertCommand(redisClient *c) {
+    if (strcasecmp(c->argv[2]->ptr,"after") == 0) {
+        pushxGenericCommand(c,REDIS_HEAD,c->argv[3],c->argv[4]);
+    } else if (strcasecmp(c->argv[2]->ptr,"before") == 0) {
+        pushxGenericCommand(c,REDIS_TAIL,c->argv[3],c->argv[4]);
+    } else {
+        addReply(c,shared.syntaxerr);
+    }
 }
 
 static void llenCommand(redisClient *c) {

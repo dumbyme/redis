@@ -63,15 +63,15 @@ start_server {
         assert_encoding ziplist xlist
         assert_equal {a b c d} [r lrange xlist 0 10]
 
-        assert_equal 5 [r rpushxafter xlist c zz]
+        assert_equal 5 [r linsert xlist before c zz]
         assert_equal {a b zz c d} [r lrange xlist 0 10]
-        assert_equal 6 [r lpushxafter xlist c yy]
+        assert_equal 6 [r linsert xlist after c yy]
         assert_equal {a b zz c yy d} [r lrange xlist 0 10]
-        assert_equal 7 [r lpushxafter xlist d dd]
-        assert_equal 7 [r lpushxafter xlist bad ddd]
+        assert_equal 7 [r linsert xlist after d dd]
+        assert_equal 7 [r linsert xlist after bad ddd]
         assert_equal {a b zz c yy d dd} [r lrange xlist 0 10]
-        assert_equal 8 [r rpushxafter xlist a aa]
-        assert_equal 8 [r rpushxafter xlist bad aaa]
+        assert_equal 8 [r linsert xlist before a aa]
+        assert_equal 8 [r linsert xlist before bad aaa]
         assert_equal {aa a b zz c yy d dd} [r lrange xlist 0 10]
     }
 
@@ -88,15 +88,15 @@ start_server {
         assert_encoding list xlist
         assert_equal {a aaaaaaaaaaaaaaaaa c d} [r lrange xlist 0 10]
 
-        assert_equal 5 [r rpushxafter xlist c zz]
+        assert_equal 5 [r linsert xlist before c zz]
         assert_equal {a aaaaaaaaaaaaaaaaa zz c d} [r lrange xlist 0 10]
-        assert_equal 6 [r lpushxafter xlist c yy]
+        assert_equal 6 [r linsert xlist after c yy]
         assert_equal {a aaaaaaaaaaaaaaaaa zz c yy d} [r lrange xlist 0 10]
-        assert_equal 7 [r lpushxafter xlist d dd]
-        assert_equal 7 [r lpushxafter xlist bad ddd]
+        assert_equal 7 [r linsert xlist after d dd]
+        assert_equal 7 [r linsert xlist after bad ddd]
         assert_equal {a aaaaaaaaaaaaaaaaa zz c yy d dd} [r lrange xlist 0 10]
-        assert_equal 8 [r rpushxafter xlist a aa]
-        assert_equal 8 [r rpushxafter xlist bad aaa]
+        assert_equal 8 [r linsert xlist before a aa]
+        assert_equal 8 [r linsert xlist before bad aaa]
         assert_equal {aa a aaaaaaaaaaaaaaaaa zz c yy d dd} [r lrange xlist 0 10]
     }
 
