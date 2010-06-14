@@ -4991,13 +4991,7 @@ static robj *listTypePop(robj *subject, int where) {
     return value;
 }
 
-static void listTypePush(robj *subject, robj *value, int where) {
-    /* Check if we need to convert the ziplist */
-    listTypeTryConversion(subject,value);
-    if (subject->encoding == REDIS_ENCODING_ZIPLIST &&
-        ziplistLen(subject->ptr) > server.list_max_ziplist_entries)
-            listTypeConvert(subject,REDIS_ENCODING_LIST);
-
+static unsigned long listTypeLength(robj *subject) {
     if (subject->encoding == REDIS_ENCODING_ZIPLIST) {
         return ziplistLen(subject->ptr);
     } else if (subject->encoding == REDIS_ENCODING_LINKEDLIST) {
