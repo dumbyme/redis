@@ -381,6 +381,7 @@ struct redisServer {
     char *requirepass;
     int rdbcompression;
     int activerehashing;
+    int dumpcore;
     /* Replication related */
     int isslave;
     char *masterauth;
@@ -715,6 +716,7 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj);
 void freeMemoryIfNeeded(void);
 int processCommand(redisClient *c);
 void setupSigSegvAction(void);
+void setupSigTermAction(void);
 struct redisCommand *lookupCommand(char *name);
 void call(redisClient *c, struct redisCommand *cmd);
 int prepareForShutdown();
