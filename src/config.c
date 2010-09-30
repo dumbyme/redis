@@ -123,6 +123,10 @@ void loadServerConfig(char *filename) {
             server.maxclients = atoi(argv[1]);
         } else if (!strcasecmp(argv[0],"maxmemory") && argc == 2) {
             server.maxmemory = memtoll(argv[1],NULL);
+        } else if (!strcasecmp(argv[0],"maxmemory_margin") && argc == 2) {
+            server.maxmemory_margin = memtoll(argv[1],NULL);
+        } else if (!strcasecmp(argv[0],"maxmemory_eviction_sample_size") && argc == 2) {
+            server.maxmemory_eviction_sample_size = atoi(argv[1]);
         } else if (!strcasecmp(argv[0],"slaveof") && argc == 3) {
             server.masterhost = sdsnew(argv[1]);
             server.masterport = atoi(argv[2]);

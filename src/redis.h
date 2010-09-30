@@ -264,6 +264,8 @@ typedef struct redisDb {
     dict *io_keys;              /* Keys with clients waiting for VM I/O */
     dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
     int id;
+    unsigned long expired_count;
+    unsigned long prematurely_expired_count;
 } redisDb;
 
 /* Client MULTI/EXEC state */
@@ -390,6 +392,8 @@ struct redisServer {
     int replstate;
     unsigned int maxclients;
     unsigned long long maxmemory;
+    unsigned long long maxmemory_margin; /* bytes to keep free for new data */
+    int maxmemory_eviction_sample_size; /* # of candidates to choose from in freeMemoryIfNeeded(). */
     unsigned int blpop_blocked_clients;
     unsigned int vm_blocked_clients;
     /* Sort parameters - qsort_r() is only available under BSD so we

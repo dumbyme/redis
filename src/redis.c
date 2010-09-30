@@ -471,6 +471,7 @@ void activeExpireCycle(void) {
                     dbDelete(db,keyobj);
                     decrRefCount(keyobj);
                     expired++;
+                    db->expired_count++;
                     server.stat_expiredkeys++;
                 }
             }
@@ -733,6 +734,8 @@ void initServerConfig() {
     server.maxclients = 0;
     server.blpop_blocked_clients = 0;
     server.maxmemory = 0;
+    server.maxmemory_margin = 0;
+    server.maxmemory_eviction_sample_size = 3;
     server.vm_enabled = 0;
     server.vm_swap_file = zstrdup("/tmp/redis-%p.vm");
     server.vm_page_size = 256;          /* 256 bytes per page */
@@ -800,6 +803,8 @@ void initServer() {
         if (server.vm_enabled)
             server.db[j].io_keys = dictCreate(&keylistDictType,NULL);
         server.db[j].id = j;
+        server.db[j].expired_count = 0;
+        server.db[j].prematurely_expired_count = 0;
     }
     server.pubsub_channels = dictCreate(&keylistDictType,NULL);
     server.pubsub_patterns = listCreate();
@@ -1267,8 +1272,8 @@ sds genRedisInfoString(void) {
         keys = dictSize(server.db[j].dict);
         vkeys = dictSize(server.db[j].expires);
         if (keys || vkeys) {
-            info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld\r\n",
-                j, keys, vkeys);
+            info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,expired=%lu,premature=%lu\r\n",
+                j, keys, vkeys, server.db[j].expired_count, server.db[j].prematurely_expired_count);
         }
     }
     return info;
@@ -1327,7 +1332,7 @@ int tryFreeOneObjectFromFreelist(void) {
  * memory usage.
  */
 void freeMemoryIfNeeded(void) {
-    while (server.maxmemory && zmalloc_used_memory() > server.maxmemory) {
+    while (server.maxmemory && zmalloc_used_memory() + server.maxmemory_margin > server.maxmemory) {
         int j, k, freed = 0;
 
         if (tryFreeOneObjectFromFreelist() == REDIS_OK) continue;
@@ -1341,7 +1346,7 @@ void freeMemoryIfNeeded(void) {
                 freed = 1;
                 /* From a sample of three keys drop the one nearest to
                  * the natural expire */
-                for (k = 0; k < 3; k++) {
+                for (k = 0; k < server.maxmemory_eviction_sample_size; k++) {
                     time_t t;
 
                     de = dictGetRandomKey(server.db[j].expires);
@@ -1352,7 +1357,10 @@ void freeMemoryIfNeeded(void) {
                     }
                 }
                 keyobj = createStringObject(minkey,sdslen(minkey));
-                dbDelete(server.db+j,keyobj);
+                if (dbDelete(server.db+j,keyobj) == DICT_OK) {
+                    server.db[j].expired_count++;
+                    server.db[j].prematurely_expired_count++;
+                }
                 server.stat_expiredkeys++;
                 decrRefCount(keyobj);
             }
