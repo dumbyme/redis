@@ -11,6 +11,9 @@ robj *lookupKey(redisDb *db, robj *key) {
     if (de) {
         robj *val = dictGetEntryVal(de);
 
+        /* Update the access time for the aging algorithm. */
+        val->lru = server.lruclock;
+
         if (server.vm_enabled) {
             if (val->storage == REDIS_VM_MEMORY ||
                 val->storage == REDIS_VM_SWAPPING)
@@ -18,8 +21,6 @@ robj *lookupKey(redisDb *db, robj *key) {
                 /* If we were swapping the object out, cancel the operation */
                 if (val->storage == REDIS_VM_SWAPPING)
                     vmCancelThreadedIOJob(val);
-                /* Update the access time for the aging algorithm. */
-                val->lru = server.lruclock;
             } else {
                 int notify = (val->storage == REDIS_VM_LOADING);
 
@@ -33,8 +34,10 @@ robj *lookupKey(redisDb *db, robj *key) {
                 if (notify) handleClientsBlockedOnSwappedKey(db,key);
             }
         }
+        server.stat_keyspace_hits++;
         return val;
     } else {
+        server.stat_keyspace_misses++;
         return NULL;
     }
 }
@@ -467,7 +470,6 @@ int expireIfNeeded(redisDb *db, robj *key) {
 
     /* Delete the key */
     server.stat_expiredkeys++;
-    server.dirty++;
     propagateExpire(db,key);
     return dbDelete(db,key);
 }
@@ -478,7 +480,7 @@ int expireIfNeeded(redisDb *db, robj *key) {
 
 void expireGenericCommand(redisClient *c, robj *key, robj *param, long offset) {
     dictEntry *de;
-    time_t seconds;
+    long seconds;
 
     if (getLongFromObjectOrReply(c, param, &seconds, NULL) != REDIS_OK) return;
 

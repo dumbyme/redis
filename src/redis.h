@@ -198,6 +198,13 @@
 #define REDIS_OP_DIFF 1
 #define REDIS_OP_INTER 2
 
+/* Redis maxmemory strategies */
+#define REDIS_MAXMEMORY_VOLATILE_LRU 0
+#define REDIS_MAXMEMORY_VOLATILE_TTL 1
+#define REDIS_MAXMEMORY_VOLATILE_RANDOM 2
+#define REDIS_MAXMEMORY_ALLKEYS_LRU 3
+#define REDIS_MAXMEMORY_ALLKEYS_RANDOM 4
+
 /* We can print the stacktrace, so our assert is defined this way: */
 #define redisAssert(_e) ((_e)?(void)0 : (_redisAssert(#_e,__FILE__,__LINE__),_exit(1)))
 #define redisPanic(_e) _redisPanic(#_e,__FILE__,__LINE__),_exit(1)
@@ -211,6 +218,8 @@ void _redisPanic(char *msg, char *file, int line);
 /* A redis object, that is a type able to hold a string / list / set */
 
 /* The actual Redis Object */
+#define REDIS_LRU_CLOCK_MAX ((1<<21)-1) /* Max value of obj->lru */
+#define REDIS_LRU_CLOCK_RESOLUTION 10 /* LRU clock resolution in seconds */
 typedef struct redisObject {
     unsigned type:4;
     unsigned storage:2;     /* REDIS_VM_MEMORY or REDIS_VM_SWAPPING */
@@ -348,12 +357,14 @@ struct redisServer {
     aeEventLoop *el;
     int cronloops;              /* number of times the cron function run */
     list *objfreelist;          /* A list of freed objects to avoid malloc() */
-    time_t lastsave;            /* Unix time of last save succeeede */
+    time_t lastsave;                /* Unix time of last save succeeede */
     /* Fields used only for stats */
-    time_t stat_starttime;         /* server start time */
-    long long stat_numcommands;    /* number of processed commands */
-    long long stat_numconnections; /* number of connections received */
-    long long stat_expiredkeys;   /* number of expired keys */
+    time_t stat_starttime;          /* server start time */
+    long long stat_numcommands;     /* number of processed commands */
+    long long stat_numconnections;  /* number of connections received */
+    long long stat_expiredkeys;     /* number of expired keys */
+    long long stat_keyspace_hits;   /* number of successful lookups of keys */
+    long long stat_keyspace_misses; /* number of failed lookups of keys */
     /* Configuration */
     int verbosity;
     int glueoutputbuf;
@@ -391,6 +402,8 @@ struct redisServer {
     int replstate;
     unsigned int maxclients;
     unsigned long long maxmemory;
+    int maxmemory_policy;
+    int maxmemory_samples;
     unsigned int blpop_blocked_clients;
     unsigned int vm_blocked_clients;
     /* Sort parameters - qsort_r() is only available under BSD so we
@@ -679,6 +692,7 @@ int getLongLongFromObject(robj *o, long long *target);
 char *strEncoding(int encoding);
 int compareStringObjects(robj *a, robj *b);
 int equalStringObjects(robj *a, robj *b);
+unsigned long estimateObjectIdleTime(robj *o);
 
 /* Replication */
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc);
